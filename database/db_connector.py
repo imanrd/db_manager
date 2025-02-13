@@ -1,12 +1,13 @@
 import sqlite3
 import traceback
 import logging
+from typing import Optional, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
 
 class DBConnector:
-    def __init__(self, db_name):
+    def __init__(self, db_name: str):
         self.db_name = db_name
         self.conn = None
 
@@ -18,7 +19,7 @@ class DBConnector:
         if self.conn:
             self.conn.close()
 
-    def execute_query(self, query, params=None):
+    def execute_query(self, query: str, params: Optional[Tuple[Any, ...]] = None) -> Optional[sqlite3.Cursor]:
         if not self.conn:
             logger.info('DBConnector: Connection not established')
             return None
