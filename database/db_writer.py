@@ -141,3 +141,96 @@ class DataFrameChunkWriter:
         if column_name in df.columns:
             df[column_name] = pd.to_datetime(df[column_name], format=time_format, errors='coerce')
         return df
+
+
+class DataExtractor:
+    """
+    Extracts and stores various types of data into the database.
+    """
+
+    def __init__(self,
+                 name: str,
+                 data_paths: dict,
+                 directory: str,
+                 reference_path: str = None):
+        """
+        Initialize the DataExtractor.
+        Args:
+            name (str): Name of the database or data type.
+            data_paths (dict): Dictionary of file paths mapped to table names.
+            directory (str): Directory containing additional CSV files.
+            reference_path (str, optional): Path to the reference data file for filtering.
+        """
+        self.queue = Queue()
+        self.data_paths = data_paths
+        self.directory = directory
+        self.name = name
+        self.reference = load_data(reference_path) if reference_path else None
+        self.csv_files = self.get_csv_files()
+
+    def get_csv_files(self):
+        """
+        Get a dictionary of CSV file paths and corresponding table names.
+        Returns:
+            dict: Dictionary with file paths as keys and table names as values.
+        """
+        csv_files = self.data_paths.copy()
+
+        files = [
+            filename
+            for filename in os.listdir(self.directory)
+            if os.path.isfile(os.path.join(self.directory, filename))
+               and filename.endswith(".csv")
+        ]
+
+        dynamic_tables = {os.path.join(self.directory, key): 'data_table' for key in files}
+        csv_files.update(dynamic_tables)
+        return csv_files
+
+    def run(self):
+        """
+        Starts the data extraction and writing process.
+        Spawns multiple processes for concurrent processing and database writing.
+        """
+        DBCreator(self.name).create_table()
+        writer_process = Process(target=DBWriter(self.name, self.reference, self.queue).write_to_db)
+        writer_process.start()
+
+        processes = []
+        for file_table in self.csv_files.items():
+            p = Process(target=DBWriter(self.name, self.reference, self.queue).process_file, args=(file_table,))
+            p.start()
+            processes.append(p)
+
+        for p in processes:
+            p.join()
+
+        self.queue.put((None, None))
+        writer_process.join()
+
+
+def sort_table_on_time(db_name: str, table_name: str, time_column_name: str):
+    """
+    Sorts the specified table to facilitate easier access to specific times by:
+        - Removing duplicate rows based on the specified time column.
+        - Creating a new table with distinct rows ordered by the time column.
+        - Replacing the old table with the new sorted version.
+        - Creating a unique index on the time column to maintain order and uniqueness.
+    Args:
+        db_name (str): Name of the database.
+        table_name (str): Name of the table to sort and clean.
+        time_column_name (str): Name of the time column to base the sorting on.
+    """
+    queries = [
+        ("DELETE FROM {} WHERE rowid NOT IN(SELECT MIN(rowid) FROM {} GROUP BY ?);", (table_name, table_name,
+                                                                                      time_column_name)),
+        ("CREATE TABLE {}_clean AS SELECT DISTINCT * FROM {} ORDER BY ?;", (table_name, table_name, time_column_name)),
+        ("DROP TABLE {};", (table_name,)),
+        ("ALTER TABLE {}_clean RENAME TO {};", (table_name, table_name)),
+        ("CREATE UNIQUE INDEX idx_{}_{} ON {}(?);", (table_name, time_column_name.replace(' ', '_'),
+                                                     table_name, time_column_name))
+    ]
+    with DBConnector(db_name) as db:
+        for query, params in queries:
+            db.execute_query(query.format(*params))
+        print(f"Table {table_name} modified successfully in {db_name}")
