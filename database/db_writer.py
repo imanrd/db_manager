@@ -193,12 +193,13 @@ class DataExtractor:
         Spawns multiple processes for concurrent processing and database writing.
         """
         DBCreator(self.name).create_table()
-        writer_process = Process(target=DBWriter(self.name, self.reference, self.queue).write_to_db)
+        writer_process = Process(target=DataFrameChunkWriter(self.name, self.reference, self.queue).write_to_db)
         writer_process.start()
 
         processes = []
         for file_table in self.csv_files.items():
-            p = Process(target=DBWriter(self.name, self.reference, self.queue).process_file, args=(file_table,))
+            p = Process(target=DataFrameChunkWriter(self.name, self.reference, self.queue).process_file,
+                        args=(file_table,))
             p.start()
             processes.append(p)
 
